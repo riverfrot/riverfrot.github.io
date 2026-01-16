@@ -1,0 +1,50 @@
+---
+---
+
+@import 'main';
+
+/* Custom color overrides for #89dceb theme */
+:root {
+  --main-color: #89dceb !important;
+  --link-color: #89dceb !important;
+  --text-color: #74c7ec !important;
+}
+
+[data-theme="light"] {
+  --sidebar-bg: linear-gradient(135deg, #89dceb 0%, #74c7ec 100%) !important;
+  --topbar-text-color: #89dceb !important;
+  --btn-primary-bg: #89dceb !important;
+  --btn-primary-border-color: #89dceb !important;
+}
+
+[data-theme="dark"] {
+  --sidebar-bg: linear-gradient(135deg, #89dceb 0%, #74c7ec 100%) !important;
+  --topbar-text-color: #89dceb !important;
+  --btn-primary-bg: #89dceb !important;
+  --btn-primary-border-color: #89dceb !important;
+}
+
+/* Sidebar customization */
+#sidebar {
+  background: linear-gradient(135deg, #89dceb 0%, #74c7ec 100%) !important;
+}
+
+/* Link colors */
+a {
+  color: #89dceb !important;
+}
+
+a:hover {
+  color: #74c7ec !important;
+}
+
+/* Tag styling */
+.post-tag {
+  background-color: #89dceb !important;
+  color: white !important;
+}
+
+/* Category styling */
+.categories a {
+  color: #89dceb !important;
+}
