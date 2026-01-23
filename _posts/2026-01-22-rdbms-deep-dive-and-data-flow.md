@@ -1,6 +1,6 @@
 ---
 title: "MySQL 아키텍처 및 상세 설명 1편 - 아키텍처 및 데이터 플로우"
-date: 2026-01-23
+date: 2026-01-22
 categories: [Database, MySQL]
 tags: [mysql, innodb , architecture, storage-engine]
 ---
