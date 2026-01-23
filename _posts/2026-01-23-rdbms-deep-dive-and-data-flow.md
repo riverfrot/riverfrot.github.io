@@ -2,7 +2,7 @@
 title: "MySQL 아키텍처 및 상세 설명 1편 - 아키텍처 및 데이터 플로우"
 date: 2026-01-23
 categories: [Database, MySQL]
-tags: [mysql, innodb, architecture, storage-engine]
+tags: [mysql, innodb , architecture, storage-engine]
 ---
 
 ## 들어가며
@@ -25,19 +25,19 @@ SELECT * FROM wallet WHERE user_id = 1;
 
 ## 목차
 
-1. [Mysql Architecture: Application부터 Disk까지의 데이터흐름](#1-mysql-architecture-application-disk-)
-2. [MySQL 엔진](#2-mysql-)
+1. [Mysql Architecture: Application부터 Disk까지의 데이터흐름](#1-mysql-architecture와-application부터-disk까지의-데이터흐름)
+2. [MySQL 엔진](#2-mysql-엔진)
   - 2.1 Connection Handler
   - 2.2 Parser
   - 2.3 Optimizer
   - 2.4 Executor
-3. [InnoDB 스토리지 엔진](#3-innodb-스토리지-)
+3. [InnoDB 스토리지 엔진](#3-innodb-스토리지-엔진)
   - 3.1 메모리 영역
   - 3.2 디스크 영역
 4. [데이터 흐름 시나리오](#4-데이터-흐름-시나리오)
   - 4.1 SELECT: 읽기의 여정
   - 4.2 INSERT/UPDATE: 쓰기의 여정
-5. [마무리: 인덱스는 왜 필요할까?](#5----)
+5. [마무리: 인덱스는 왜 필요할까?](#5-마무리-인덱스는-왜-필요할까)
 
 ---
 
