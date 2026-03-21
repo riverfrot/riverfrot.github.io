@@ -251,7 +251,7 @@ for n_users in [1, 10, 50]:
 
 동시 요청 처리 중 `nvidia-smi`를 확인하면 GPU Utilization이 높게 유지되는 것을 볼 수 있다. Continuous Batching이 GPU를 쉬지 않게 만드는 것이다.
 
-![동시 요청 중 GPU 사용량](/assets/img/benchmark-cocurrent-nvidia-smi![img.png](img.png).png)
+![동시 요청 중 GPU 사용량](/assets/img/benchmark-cocurrent-nvidia-smi.png)
 *▲ 동시 50명 요청 처리 중 nvidia-smi. GPU Utilization이 높게 유지되며 배칭 효과를 확인*
 
 **Static Batching (max-num-seqs=1)**
