@@ -103,7 +103,7 @@ PagedAttention (Dynamic Paging):
 python -m vllm.entrypoints.openai.api_server \
   --model Qwen/Qwen2.5-7B-Instruct \
   --max-model-len 4096 \
-  --gpu-memory-utilization 0.5 \
+  --gpu-memory-utilization 0.9 \
   --port 8000
 ```
 
@@ -113,7 +113,7 @@ python -m vllm.entrypoints.openai.api_server \
 ![NVIDIA A40 GPU nvidia-smi](/assets/img/qwen2.5-7B-nvidia-smi.png)
 *▲ nvidia-smi로 확인한 A40 48GB GPU 정보. VRAM 46GB 사용 가능*
 
-서버 구동 후 `nvidia-smi`를 확인하면 **약 41.8GB / 46GB**를 사용한다. 모델 가중치 자체는 약 14GB이지만, vLLM이 `--gpu-memory-utilization 0.5` 설정에 따라 **나머지 27GB를 KV Cache로 미리 예약**한 것이다. 이게 PagedAttention이 작동하는 방식이다.
+서버 구동 후 `nvidia-smi`를 확인하면 **약 41.8GB / 46GB**를 사용한다. 모델 가중치 자체는 약 14GB이지만, vLLM이 `--gpu-memory-utilization 0.9` 설정에 따라 **나머지 27GB를 KV Cache로 미리 예약**한 것이다. 이게 PagedAttention이 작동하는 방식이다.
 
 ### 2.3 FP16 모델 리소스
 
