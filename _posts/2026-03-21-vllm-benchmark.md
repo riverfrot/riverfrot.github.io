@@ -98,42 +98,67 @@ PagedAttention (Dynamic Paging):
 | max-model-len | 4096 |
 | gpu-memory-utilization | 0.9 |
 
-![NVIDIA A40 GPU nvidia-smi](/assets/img/qwen2.5-7B-nvidia-smi.png)
-*▲ nvidia-smi로 확인한 A40 48GB GPU 정보. VRAM 46GB 사용 가능*
-
 ### 2.2 FP16 서빙
-
 ```bash
 python -m vllm.entrypoints.openai.api_server \
   --model Qwen/Qwen2.5-7B-Instruct \
   --max-model-len 4096 \
-  --gpu-memory-utilization 0.9 \
+  --gpu-memory-utilization 0.5 \
   --port 8000
 ```
 
-서버 구동 후 `nvidia-smi`를 확인하면 **약 41.8GB / 46GB**를 사용한다. 모델 가중치 자체는 약 14GB이지만, vLLM이 `--gpu-memory-utilization 0.9` 설정에 따라 **나머지 27GB를 KV Cache로 미리 예약**한 것이다. 이게 PagedAttention이 작동하는 방식이다.
-
-![FP16 서빙 nvidia-smi](/assets/img/qwen2.5-7B.png)
+![FP16 서빙 모델](/assets/img/qwen2.5-7B.png)
 *▲ FP16 모델 로딩 후 nvidia-smi. 모델 가중치 14GB + KV Cache 예약으로 약 41.8GB 사용*
 
-### 2.3 AWQ INT4 서빙
+![NVIDIA A40 GPU nvidia-smi](/assets/img/qwen2.5-7B-nvidia-smi.png)
+*▲ nvidia-smi로 확인한 A40 48GB GPU 정보. VRAM 46GB 사용 가능*
+
+서버 구동 후 `nvidia-smi`를 확인하면 **약 41.8GB / 46GB**를 사용한다. 모델 가중치 자체는 약 14GB이지만, vLLM이 `--gpu-memory-utilization 0.5` 설정에 따라 **나머지 27GB를 KV Cache로 미리 예약**한 것이다. 이게 PagedAttention이 작동하는 방식이다.
+
+### 2.3 FP16 모델 리소스
 
 ```bash
-python -m vllm.entrypoints.openai.api_server \
-  --model Qwen/Qwen2.5-7B-Instruct-AWQ \
-  --quantization awq \
-  --max-model-len 4096 \
-  --gpu-memory-utilization 0.9 \
-  --port 8000
+python -c "
+import torch
+from transformers import AutoModelForCausalLM
+print('=== FP16 모델 로딩 ===')
+model = AutoModelForCausalLM.from_pretrained(
+    '/workspace/models/qwen2.5-7b',
+    torch_dtype=torch.float16,
+    device_map='auto'
+)
+mem = torch.cuda.memory_allocated() / 1e9
+print(f'FP16 GPU 메모리: {mem:.1f}GB')
+del model
+torch.cuda.empty_cache()
+"
 ```
 
-![AWQ INT4 서빙 서버 기동](/assets/img/qwen2.5-7B-awq.png)
-*▲ AWQ INT4 모델 서버 기동 로그. quantization=awq 옵션으로 4bit 양자화 모델 로딩*
+![FP16 모델 GPU 메모리 사용량](/assets/img/fp16-model.png)
+*▲ FP16 모델 로딩 시 GPU 메모리 사용량. Qwen2.5-7B 전체 가중치가 약 14GB를 차지*
 
-![AWQ INT4 서빙 nvidia-smi](/assets/img/qwen2.5-7B-awq-nvidia-smi.png)
-*▲ AWQ 모델 로딩 후 nvidia-smi. 모델 가중치는 약 4.5GB로 줄었지만 KV Cache 예약으로 총 사용량은 유사*
+### 2.4 AWQ INT4 모델 리소스
 
-### 2.4 단일 요청 성능 비교
+```bash
+python -c "
+import torch
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+print('=== AWQ 4bit 모델 로딩 ===')
+bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type='nf4', bnb_4bit_compute_dtype=torch.float16)
+model = AutoModelForCausalLM.from_pretrained(
+    '/workspace/models/qwen2.5-7b',
+    quantization_config=bnb,
+    device_map='auto'
+)
+mem = torch.cuda.memory_allocated() / 1e9
+print(f'4bit GPU 메모리: {mem:.1f}GB')
+"
+```
+
+![AWQ 4bit 모델 GPU 메모리 사용량](/assets/img/awq-4q-model.png)
+*▲ AWQ 4bit 모델 로딩 시 GPU 메모리 사용량. 양자화로 가중치가 약 4.5GB로 줄어 KV Cache 여유 공간 확보*
+
+### 2.5 단일 요청 성능 비교
 
 TTFT(Time To First Token)와 TPS(Tokens Per Second)를 측정했다.
 
@@ -160,7 +185,7 @@ for line in response.iter_lines():
 ![AWQ INT4 벤치마크 결과](/assets/img/qwen2.5-7B-script-result-awq.png)
 *▲ AWQ INT4 단일 요청 벤치마크 결과. TTFT 99ms, TPS 15.2로 dequantization 오버헤드 확인*
 
-### 2.5 "양자화하면 무조건 빠르다"는 틀렸다
+### 2.6 "양자화하면 무조건 빠르다"는 틀렸다
 
 **A40 48GB처럼 VRAM이 충분한 환경에서는 FP16이 오히려 빠르다.** AWQ INT4는 추론 시 매 연산마다 INT4 → FP16 dequantization 변환이 발생하고, 이 오버헤드가 메모리 절약 이점을 상쇄한다.
 
@@ -226,7 +251,7 @@ for n_users in [1, 10, 50]:
 
 동시 요청 처리 중 `nvidia-smi`를 확인하면 GPU Utilization이 높게 유지되는 것을 볼 수 있다. Continuous Batching이 GPU를 쉬지 않게 만드는 것이다.
 
-![동시 요청 중 GPU 사용량](/assets/img/benchmark-cocurrent-nvidia-smi.png)
+![동시 요청 중 GPU 사용량](/assets/img/benchmark-cocurrent-nvidia-smi![img.png](img.png).png)
 *▲ 동시 50명 요청 처리 중 nvidia-smi. GPU Utilization이 높게 유지되며 배칭 효과를 확인*
 
 **Static Batching (max-num-seqs=1)**
@@ -280,7 +305,7 @@ vllm:num_requests_waiting  = 0.0    ← 대기열 없음
 vllm:num_preemptions_total = 0.0    ← preemption 없음
 ```
 
-**제한된 KV Cache (gpu-memory-utilization=0.4, 200명)**
+**제한된 KV Cache (gpu-memory-utilization=0.2, 200명)**
 
 ```
 vllm:num_requests_running  = 184.0  ← 200개 중 184개만 처리 가능
