@@ -99,6 +99,7 @@ PagedAttention (Dynamic Paging):
 | gpu-memory-utilization | 0.9 |
 
 ![NVIDIA A40 GPU nvidia-smi](/assets/img/qwen2.5-7B-nvidia-smi.png)
+*▲ nvidia-smi로 확인한 A40 48GB GPU 정보. VRAM 46GB 사용 가능*
 
 ### 2.2 FP16 서빙
 
@@ -113,6 +114,7 @@ python -m vllm.entrypoints.openai.api_server \
 서버 구동 후 `nvidia-smi`를 확인하면 **약 41.8GB / 46GB**를 사용한다. 모델 가중치 자체는 약 14GB이지만, vLLM이 `--gpu-memory-utilization 0.9` 설정에 따라 **나머지 27GB를 KV Cache로 미리 예약**한 것이다. 이게 PagedAttention이 작동하는 방식이다.
 
 ![FP16 서빙 nvidia-smi](/assets/img/qwen2.5-7B.png)
+*▲ FP16 모델 로딩 후 nvidia-smi. 모델 가중치 14GB + KV Cache 예약으로 약 41.8GB 사용*
 
 ### 2.3 AWQ INT4 서빙
 
@@ -126,7 +128,10 @@ python -m vllm.entrypoints.openai.api_server \
 ```
 
 ![AWQ INT4 서빙 서버 기동](/assets/img/qwen2.5-7B-awq.png)
+*▲ AWQ INT4 모델 서버 기동 로그. quantization=awq 옵션으로 4bit 양자화 모델 로딩*
+
 ![AWQ INT4 서빙 nvidia-smi](/assets/img/qwen2.5-7B-awq-nvidia-smi.png)
+*▲ AWQ 모델 로딩 후 nvidia-smi. 모델 가중치는 약 4.5GB로 줄었지만 KV Cache 예약으로 총 사용량은 유사*
 
 ### 2.4 단일 요청 성능 비교
 
@@ -150,7 +155,10 @@ for line in response.iter_lines():
 | GPU 메모리 (nvidia-smi) | ~41.8GB | ~42.3GB | 둘 다 0.9 예약 |
 
 ![FP16 벤치마크 결과](/assets/img/qwen2.5-7B-script-result.png)
+*▲ FP16 단일 요청 벤치마크 결과. TTFT 57ms, TPS 35.4로 빠른 응답 속도*
+
 ![AWQ INT4 벤치마크 결과](/assets/img/qwen2.5-7B-script-result-awq.png)
+*▲ AWQ INT4 단일 요청 벤치마크 결과. TTFT 99ms, TPS 15.2로 dequantization 오버헤드 확인*
 
 ### 2.5 "양자화하면 무조건 빠르다"는 틀렸다
 
@@ -214,10 +222,12 @@ for n_users in [1, 10, 50]:
 | 50명 | **6.7** | 7,382ms | **7,420ms** | 0% |
 
 ![Continuous Batching 동시 요청 결과](/assets/img/qwen2.5b-7b-awq-concurrent-test.png)
+*▲ Continuous Batching 모드에서 동시 1/10/50명 부하 테스트 결과. 50명에서도 P99 7,420ms로 안정적*
 
 동시 요청 처리 중 `nvidia-smi`를 확인하면 GPU Utilization이 높게 유지되는 것을 볼 수 있다. Continuous Batching이 GPU를 쉬지 않게 만드는 것이다.
 
 ![동시 요청 중 GPU 사용량](/assets/img/benchmark-cocurrent-nvidia-smi.png)
+*▲ 동시 50명 요청 처리 중 nvidia-smi. GPU Utilization이 높게 유지되며 배칭 효과를 확인*
 
 **Static Batching (max-num-seqs=1)**
 
@@ -228,6 +238,7 @@ for n_users in [1, 10, 50]:
 | 50명 | **1.1** | 24,475ms | **47,091ms** | 0% |
 
 ![Static Batching 동시 요청 결과](/assets/img/qwen2.5b-7b-awq-concurrent-static-test.png)
+*▲ Static Batching(max-num-seqs=1) 모드에서 동시 요청 결과. 50명 기준 P99가 47초까지 치솟음*
 
 ### 3.5 핵심 인사이트
 
@@ -249,7 +260,7 @@ for n_users in [1, 10, 50]:
 
 실제 서비스에서는 GPU 메모리가 항상 넉넉하지 않다. 동시 요청이 급증하면 KV Cache가 부족해지고, vLLM은 **Preemption** — 기존 요청의 KV Cache를 swap하고 새 요청을 받는 동작 — 을 수행한다.
 
-이 상황을 관찰하기 위해 `--gpu-memory-utilization 0.4`로 KV Cache를 의도적으로 제한하고, 200명 동시 요청 + max_tokens=500의 긴 응답을 요구했다.
+이 상황을 관찰하기 위해 `--gpu-memory-utilization 0.2`로 KV Cache를 의도적으로 제한하고, 200명 동시 요청 + max_tokens=500의 긴 응답을 요구했다.
 
 ### 4.2 vLLM /metrics 엔드포인트
 
@@ -278,6 +289,7 @@ vllm:num_preemptions_total = 17.0   ← 17번 KV Cache swap 발생
 ```
 
 ![vLLM metrics - Preemption 관찰](/assets/img/metric_result.png)
+*▲ vLLM /metrics 엔드포인트 결과. waiting=16, preemption=17로 KV Cache 부족 상황 확인*
 
 ### 4.4 운영 관점에서의 시사점
 
@@ -347,6 +359,7 @@ lora_config = LoraConfig(
 | 학습 소요시간 (3 steps) | 2.7초 |
 
 ![QLoRA 학습 결과](/assets/img/QLoRA_result.png)
+*▲ QLoRA 학습 로그. Loss가 10.05 → 9.46 → 8.56으로 감소하며 학습이 정상 진행됨을 확인*
 
 전체 파라미터의 **0.066%만 학습**한다. 7B 모델을 Full Fine-tuning하려면 A100 80GB가 필요하지만, QLoRA는 **5.9GB**만 사용하므로 A40 한 장으로 충분하다.
 
@@ -398,7 +411,10 @@ curl http://localhost:8000/v1/chat/completions \
 ```
 
 ![vLLM LoRA 서빙 모델 목록](/assets/img/lora_serving_models.png)
+*▲ /v1/models API 응답. base model과 incident-analyzer LoRA 모델이 동시에 서빙되는 것을 확인*
+
 ![incident-analyzer 응답 결과](/assets/img/incident-analyzer-response.png)
+*▲ incident-analyzer LoRA 모델의 실제 응답. OOMKilled 장애 분석 요청에 대한 추론 결과*
 
 하나의 base model 위에 여러 LoRA adapter를 동시에 서빙할 수 있다. 멀티 테넌트 환경에서 고객별로 Fine-tuning된 모델을 26MB adapter만 교체하며 서빙할 수 있다는 뜻이다.
 
@@ -452,7 +468,8 @@ vLLM으로 모델을 서빙하는 건 알겠다. 그런데 여러 Agent가 동�
 ---
 
 ### 참고 자료
-- vLLM GitHub: https://github.com/vllm-project/vllm
+- 본문 벤치마크 스크립트 및 코드: [riverfrot/vllm-benchmark-code](https://github.com/riverfrot/vllm-benchmark-code)
+- vLLM GitHub: [vllm-project/vllm](https://github.com/vllm-project/vllm)
 - PagedAttention 논문: Kwon et al., "Efficient Memory Management for Large Language Model Serving with PagedAttention" (2023)
-- Qwen2.5 모델: https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
+- Qwen2.5 모델: [Qwen/Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct)
 - QLoRA 논문: Dettmers et al., "QLoRA: Efficient Finetuning of Quantized Language Models" (2023)
