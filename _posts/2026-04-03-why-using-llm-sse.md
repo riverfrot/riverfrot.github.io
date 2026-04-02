@@ -1,6 +1,6 @@
 ---
 title: "[LLM Serving] LLM 토큰 스트리밍에 SSE를 선택한 이유: 프로토콜 비교부터 HTTP/3까지"
-date: 2026-04-03
+date: 2026-04-02
 categories: [AI, LLM]
 tags: [llm-serving, sse, streaming, server-sent-events, http2, http3, quic, websocket]
 ---
