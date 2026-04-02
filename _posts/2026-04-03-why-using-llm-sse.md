@@ -21,7 +21,7 @@ LLM은 토큰을 하나씩 생성(Autoregressive)하기 때문에, **첫 토큰�
 
 [이전 글](https://riverfrot.github.io/posts/vllm-benchmark/)에서는 vLLM의 Continuous Batching이 throughput을 6배 향상시키는 것을 확인했다. 하지만 **생성된 토큰을 클라이언트에게 어떤 프로토콜로 전달할 것인가**는 별개의 문제다.
 
-이 글에서는 LLM 스트리밍 서버를 구축할 때 **왜 SSE(Server-Sent Events)를 선택했는지**, 프로토콜 수준의 네트워크 통신 비교, 실제 LLM 서비스(ChatGPT·Claude)의 구현 분석, 그리고 Last-Event-ID를 활용한 메시지 유실 방지 전략까지 다뤄 보겠습니다.
+이 글에서는 LLM 스트리밍 서버를 구축할 때 **왜 SSE(Server-Sent Events)를 선택했는지**, 프로토콜 수준의 네트워크 통신 비교, 실제 LLM 서비스(ChatGPT·Claude)의 구현 분석, 그리고 Last-Event-ID를 활용한 메시지 유실 방지 전략까지 알아 보도록 하자
 
 ## 목차
 
@@ -45,7 +45,7 @@ LLM 스트리밍을 위한 프로토콜 후보는 크게 세 가지다. 각각�
 ![HTTP Polling 통신 흐름](/assets/img/sse/Polling.png)
 *▲ HTTP Polling: 매 요청마다 TCP Handshake가 반복되고, 업데이트가 없어도 응답 사이클이 발생한다*
 
-매 요청마다 TCP 3-way Handshake(SYN → SYN-ACK → ACK)가 발생하고, TLS를 사용한다면 TLS Handshake까지 추가된다. 업데이트가 없어도 요청-응답 사이클이 반복되므로 **서버 리소스와 네트워크 대역폭이 낭비**된다. 200토큰을 수신하려면 수십 회의 TCP 연결과 HTTP 헤더 반복이 필요하다.
+매 요청마다 TCP 3-way Handshake(SYN → SYN-ACK → ACK)가 발생하고, TLS를 사용한다면 TLS Handshake까지 추가된다. 업데이트가 없어도 요청-응답 사이클이 반복되므로 **서버 리소스와 네트워크 대역폭이 낭비**된다. 200토큰을 수신하려면 수십 회의 HTTP 요청과 응답에 대한 반복이 필요하다.
 
 ### 1.2 Server-Sent Events (SSE)
 
@@ -331,43 +331,14 @@ Last-Event-ID는 SSE 프로토콜에서 **메시지 유실을 방지하는 핵�
 
 EventSource API는 `readyState`로 연결 상태를 관리한다. 상태는 세 가지다.
 
-```
-                    ┌─────────────────────────┐
-                    │    CONNECTING (0)        │
-                    │    초기 연결 시도 중      │
-                    │    new EventSource(url)  │
-                    └────────────┬────────────┘
-                                 │ 서버 응답 200 + text/event-stream
-                                 ▼
-                    ┌─────────────────────────┐
-                    │       OPEN (1)           │
-                    │    이벤트 수신 중         │◄─────────────────────┐
-                    │    id: 42                │                      │
-                    │    data: {"token":"안녕"} │                      │
-                    └─────┬──────────┬────────┘                      │
-                          │          │                                │
-              정상 종료    │          │ 네트워크 오류 / 서버 종료       │
-          (서버가 close)  │          │                                │
-                          ▼          ▼                                │
-              ┌────────────┐   ┌──────────────────────────┐          │
-              │ CLOSED (2) │   │     CONNECTING (0)        │          │
-              │ 완전 종료   │   │   자동 재연결 시도 중      │          │
-              │ (수동 복구  │   │                           │          │
-              │  필요)      │   │   Header:                 │          │
-              └────────────┘   │   Last-Event-ID: 42       │──────────┘
-                               │                           │ 재연결 성공 →
-                               │   → 서버는 id:42 이후     │ id:43부터 수신 재개
-                               │     이벤트부터 재전송      │
-                               └───────────────────────────┘
-```
+![EventSource readyState 상태 전이](/assets/img/sse/event_source.png)
+*▲ EventSource의 세 가지 readyState 상태 전이. CONNECTING(0) → OPEN(1) → CLOSED(2) 또는 자동 재연결*
 
-핵심은 **OPEN → CONNECTING 전환 시 브라우저가 자동으로 `Last-Event-ID` 헤더를 포함**한다는 것이다. 서버는 이 ID를 기준으로 놓친 이벤트만 재전송하면 된다. WebSocket에는 이 메커니즘이 없으므로, 재연결 로직과 메시지 복구를 모두 직접 구현해야 한다.
+핵심은 **OPEN → CONNECTING 전환 시 브라우저가 자동으로 `Last-Event-ID` 헤더를 포함**한다는 것이다. 서버는 이 ID를 기준으로 놓친 이벤트만 재전송하면 된다. 연결이 끊기더라도 `EventSource` API가 재연결과 메시지 복구를 자동으로 처리하므로, 개발자가 별도로 구현할 필요가 없다.
+
+WebSocket에는 이 메커니즘이 없다. 재연결 로직, 메시지 ID 관리, 놓친 메시지 복구를 **모두 직접 구현**해야 한다.
 
 출처: [MDN EventSource.readyState](https://developer.mozilla.org/en-US/docs/Web/API/EventSource/readyState)
-
-브라우저의 `EventSource` API는 이 과정을 **자동으로 처리**한다. 연결이 끊기면 자동으로 재연결을 시도하고, 마지막으로 수신한 이벤트 ID를 `Last-Event-ID` 헤더에 포함해서 보낸다.
-
-WebSocket에는 이런 메커니즘이 없다. 재연결 로직, 메시지 ID 관리, 놓친 메시지 복구를 **모두 직접 구현**해야 한다.
 
 ### 4.2 서버 측 Last-Event-ID 관리: Mysql + Redis 조합
 
