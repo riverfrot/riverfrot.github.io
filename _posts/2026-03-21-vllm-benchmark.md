@@ -185,17 +185,48 @@ for line in response.iter_lines():
 ![AWQ INT4 벤치마크 결과](/assets/img/qwen2.5-7B-script-result-awq.png)
 *▲ AWQ INT4 단일 요청 벤치마크 결과. TTFT 99ms, TPS 15.2로 dequantization 오버헤드 확인*
 
-### 2.6 "양자화하면 무조건 빠르다"는 틀렸다
+### 2.6 "양자화하면 무조건 빠르다"는 틀렸다 — GPU 아키텍처에 따라 다르다
 
-**A40 48GB처럼 VRAM이 충분한 환경에서는 FP16이 오히려 빠르다.** AWQ INT4는 추론 시 매 연산마다 INT4 → FP16 dequantization 변환이 발생하고, 이 오버헤드가 메모리 절약 이점을 상쇄한다.
+벤치마크 결과를 보면 AWQ INT4가 FP16보다 느렸다. 이유는 A40의 아키텍처 한계에 있다.
 
-양자화가 빛나는 건 **VRAM이 부족한 환경**(L4 24GB, RTX 4090 24GB 등)에서다. 7B FP16 모델(~14GB)이 24GB GPU에 올라가면 KV Cache 공간이 ~10GB밖에 안 남아 동시 처리 능력이 크게 제한된다. 이때 AWQ INT4(~4.5GB)로 줄이면 KV Cache에 ~19.5GB를 할당할 수 있어 **동시 처리량이 2배 이상** 늘어난다.
+AWQ는 **W4A16(Weight 4bit, Activation 16bit)** 방식이다. 가중치만 INT4로 압축하고, 실제 연산은 FP16으로 수행한다. 문제는 Tensor Core가 양쪽 operand의 타입이 일치해야 동작한다는 것이다. 따라서 INT4 가중치를 FP16으로 변환(dequantization)하는 과정이 필요하다.
+
+A40(Ampere)에서는 이 dequantization이 별도의 GPU 커널로 실행된다. GEMM 연산 전에 dequantization 커널이 먼저 실행되고, 그 결과를 메모리에 쓴 뒤, FP16 GEMM 커널이 다시 읽어서 연산한다. 커널 론치 오버헤드가 2배이고, 불필요한 메모리 왕복이 발생한다. 이것이 FP16 직접 연산보다 느린 근본 원인이다.
 
 ```
-핵심: 양자화는 "속도 최적화"가 아니라 "메모리 최적화"다.
-VRAM이 충분하면 FP16, 부족하면 양자화.
+A40 (Ampere) — Dual Kernel:
+[INT4 Weight] → Kernel 1: Dequantize → [FP16 Temp] → GPU Memory Write
+              → GPU Memory Read → Kernel 2: FP16 GEMM
+              → 커널 2회 론치 + 메모리 왕복 = FP16보다 느림
+
+Ada Lovelace (L4/L40S/RTX 4090) — Marlin Fused Kernel:
+[INT4 Weight] → Single Kernel: Dequantize + GEMM (fused)
+              → 커널 1회 + 메모리 왕복 없음 = FP16과 비슷하거나 소폭 빠름
+
+Hopper (H100/H200) — FP8 Tensor Core:
+[FP8 Weight + FP8 Activation] → Tensor Core 직접 연산
+                               → Dequantization 자체가 불필요 = FP16 대비 ~1.6x 빠름
+
+Blackwell (B200/RTX 5090) — NVFP4 Tensor Core:
+[FP4 Weight + FP4 Activation] → 네이티브 4bit 연산
+                               → 메모리 75% 절약 + 연산 2x+ 가속
 ```
 
+핵심은 **양자화의 효과가 GPU 아키텍처에 종속적**이라는 것이다.
+
+- **A40 (Ampere)**: W4A16 dequantization 오버헤드로 FP16보다 느림. 양자화는 VRAM이 부족할 때 "모델을 올리기 위한 수단"으로만 의미 있음
+- **Ada Lovelace (L4, L40S, RTX 4090)**: Marlin 커널로 W4A16 오버헤드 최소화. 메모리 절약 효과를 속도 저하 없이 얻을 수 있음
+- **Hopper (H100)**: FP8 W8A8로 가중치+활성화 모두 양자화하면 Tensor Core가 직접 연산. 진정한 "양자화 = 속도 향상"
+- **Blackwell (B200)**: NVFP4로 4bit 네이티브 연산. 양자화가 메모리와 속도 모두에서 최적
+
+**결론: "양자화하면 빨라지나요?"**
+- A40에서: 아니오. 메모리가 부족할 때만 사용하세요.
+- H100에서: 네. FP8이면 1.6배 빨라집니다.
+- B200에서: 네. NVFP4면 2배 이상 빨라집니다.
+
+> 양자화는 "메모리 최적화"인지 "연산 가속"인지, GPU가 결정한다.
+
+- 출처: LLM 추론에 대한 NVFP4의 영향 - [nvidia-blackwell](https://www.edge-ai-vision.com/2025/10/nvidia-blackwell-the-impact-of-nvfp4-for-llm-inference/)
 ---
 
 ## 3. Continuous Batching vs Static Batching 비교
@@ -498,3 +529,4 @@ vLLM으로 모델을 서빙하는 건 알겠다. 그런데 여러 Agent가 동�
 - PagedAttention 논문: Kwon et al., "Efficient Memory Management for Large Language Model Serving with PagedAttention" (2023)
 - Qwen2.5 모델: [Qwen/Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct)
 - QLoRA 논문: Dettmers et al., "QLoRA: Efficient Finetuning of Quantized Language Models" (2023)
+- LLM 추론에 대한 NVFP4의 영향: [nvidia-blackwell](https://www.edge-ai-vision.com/2025/10/nvidia-blackwell-the-impact-of-nvfp4-for-llm-inference/)
