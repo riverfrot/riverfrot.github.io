@@ -40,7 +40,7 @@ LLM 스트리밍을 위한 프로토콜 후보는 크게 세 가지다. 각각�
 
 ### 1.1 HTTP Polling
 
-환경 : HTTP/1.1, Keep-Alive : active, Polling 방식
+아키텍쳐 환경 : HTTP/1.1, Keep-Alive : active, Polling 방식
 
 ![HTTP Polling 통신 흐름](/assets/img/sse/Polling.png)
 *▲ HTTP Polling: 매 요청마다 TCP Handshake가 반복되고, 업데이트가 없어도 응답 사이클이 발생한다*
@@ -49,12 +49,16 @@ LLM 스트리밍을 위한 프로토콜 후보는 크게 세 가지다. 각각�
 
 ### 1.2 Server-Sent Events (SSE)
 
+아키텍쳐 환경 : HTTP/1.1, Keep-Alive : active, Server-Sent Events 방식
+
 ![SSE 통신 흐름](/assets/img/sse/ServerSentEvents.png)
 *▲ SSE: 최초 1회 TCP Handshake 후 연결을 유지하며 서버가 이벤트를 단방향으로 push*
 
 TCP Handshake는 **최초 1회**만 발생한다. 이후 서버는 응답을 완료하지 않고, Chunked Transfer Encoding으로 연결을 열어둔 채 토큰을 하나씩 push한다. `event:`, `id:`, `data:` 필드로 구조화된 텍스트 이벤트를 전달하며, `id:` 필드는 재연결 시 Last-Event-ID로 활용된다.
 
 ### 1.3 WebSocket
+
+아키텍쳐 환경 : HTTP/1.1, Keep-Alive : active, Websocket 방식
 
 ![WebSocket 통신 흐름](/assets/img/sse/Websocket.png)
 *▲ WebSocket: HTTP Handshake 후 ws:// 프로토콜로 업그레이드하여 양방향 통신*
