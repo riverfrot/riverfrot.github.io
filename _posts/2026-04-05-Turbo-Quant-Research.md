@@ -1,6 +1,6 @@
 ---
 title: "[LLM Serving] TurboQuant란 무엇이며, 어떻게 KV Cache 양자화로 메모리를 5배 줄일 수 있을까?"
-date: 2026-04-05
+date: 2026-04-04
 categories: [AI, LLM]
 tags: [turboquant, kv-cache, quantization, llm-serving, benchmark, vllm, paged-attention]
 math: true
