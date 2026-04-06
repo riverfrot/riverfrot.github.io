@@ -411,9 +411,6 @@ Qwen 모델 실측 (scos-lab):
 
 ---
 
-## 5. 벤치마크: RunPod A40에서 KV Cache 양자화 실측
-
-> ⚠️ **주의**: TurboQuant는 아직 **Google 공식 코드가 공개되지 않았다.** 아래 벤치마크는 커뮤니티 구현체([hackimov/turboquant-kv](https://github.com/hackimov/turboquant-kv))를 사용한 것이며, 공식 구현과 성능이 다를 수 있다.
 
 ### 5.1 실험 환경
 
@@ -421,16 +418,19 @@ Qwen 모델 실측 (scos-lab):
 |------|------|
 | GPU | NVIDIA A40 48GB |
 | CUDA | 12.8 |
-| 모델 | Qwen/Qwen2.5-7B-Instruct |
+| 모델 | meta-llama/Llama-3.1-8B-Instruct (논문과 동일) |
 | 구현체 | hackimov/turboquant-kv (커뮤니티) |
 | Python | 3.10 |
 | PyTorch | 2.x + Triton |
+
+> ⚠️ **주의**: TurboQuant는 아직 **Google 공식 코드가 공개되지 않았다.** 아래 벤치마크는 커뮨니티 구현체를 사용한 것이며, 공식 구현과 성능이 다를 수 있다.
+> **참고** : 테스트 환경은 논문에서 테스트한 모델인 meta-llama/Llama-3.1-8B-Instruct을 사용하였다.
 
 ### 5.2 환경 설정
 
 ```bash
 # RunPod A40 환경 기준
-pip install torch transformers accelerate
+pip install torch transformers accelerate scipy
 
 # TurboQuant 커뮤니티 구현체 설치
 git clone https://github.com/hackimov/turboquant-kv.git
@@ -438,7 +438,119 @@ cd turboquant-kv
 pip install -e ".[triton]"
 ```
 
-벤치마크 테스트 결과는 실제 논문에서 발표한 수치와 일치 하지 않은 부분이 많이 발생되어 추후 google 공식 코드 공개 후 다시 테스트후 업데이트 예정 입니다.
+### 5.3 실험 1: 랜덤 회전의 Gaussianization 효과 검증
+
+TurboQuant의 핵심 가정은 "랜덤 회전 후 좌표가 가우시안 분포를 따른다"는 것이다. Llama-3.1-8B의 실제 KV 벡터로 검증한다.
+
+![실험 1: 랜덤 회전 Gaussianization 검증 결과](/assets/img/turboquant/benchmark-1.png)
+*▲ 실험 1 결과: Llama-3.1-8B의 KV 벡터에 랜덤 회전 적용 전/후 kurtosis 비교*
+
+**결과**:
+
+| 메트릭 | 회전 전 | 회전 후 | 이론값 |
+|--------|---------|---------|--------|
+| Kurtosis | **3.0** | **2.78** | 3.0 (가우시안) |
+| Std | - | 0.0658 | 0.0884 (1/√128) |
+| Std 비율 | - | 0.7443 | 1.0 |
+
+**Llama-3.1-8B는 회전 전부터 kurtosis가 이미 3.0(가우시안)** 이다. 이전에 커뮤니티에서 보고된 Qwen 모델의 kurtosis(~900)과는 완전히 다른 양상이다.
+
+```
+Qwen2.5-7B:     회전 전 kurtosis = ~900  → 회전 후 = ~2.9  (극적 변화)
+Llama-3.1-8B:   회전 전 kurtosis = 3.0   → 회전 후 = 2.78  (이미 가우시안)
+```
+
+이것은 **모델 아키텍처에 따라 KV 벡터의 분포 특성이 크게 다르다**는 것을 보여준다. Llama 계열은 이미 에너지가 균등하게 분산되어 있어서 랜덤 회전의 효과가 크지 않지만, Qwen처럼 outlier가 심한 모델에서는 랜덤 회전이 필수적이다.
+
+### 5.4 실험 2: K/V Norm 비대칭 분석
+
+논문이 직접 다루지 않았지만 커뮤니티에서 발견된 중요한 특성 — **Key와 Value의 norm 차이**를 레이어별로 측정한다.
+
+![실험 2: K/V Norm 비대칭 분석 결과](/assets/img/turboquant/benchmark-2.png)
+*▲ 실험 2 결과: 레이어별 Key/Value norm 측정. Layer 0에서 K/V ratio가 43.8배에 달한다*
+
+**결과**:
+
+| Layer | K norm | V norm | K/V ratio |
+|-------|--------|--------|-----------|
+| 0 | 15.23 | 0.35 | **43.8x** |
+| 7 | 28.07 | 2.45 | 11.5x |
+| 15 | 26.51 | 2.68 | 9.9x |
+| 23 | 24.72 | 3.48 | 7.1x |
+| 31 | 25.63 | 5.75 | 4.5x |
+
+**Layer 0에서 K/V ratio가 43.8배**에 달한다. 양자화 오차는 norm²에 비례하므로, Key가 Value보다 양자화에 **훨씬 더 민감**하다는 뜻이다. 이전 글(4.5절)에서 커뮤니티가 발견한 K/V 비대칭 문제를 실측으로 확인한 것이다.
+
+```
+양자화 오차 ∝ norm²
+  Key (norm=15.23):  오차 ∝ 231.9
+  Value (norm=0.35): 오차 ∝ 0.12
+  → Key의 양자화 오차가 ~1,900배 더 큼!
+```
+
+이 결과는 **K/V에 같은 bit-width를 할당하는 것이 비효율적**임을 시사한다. Key에 더 많은 bit를 할당하는 비대칭 전략이 품질 보존에 효과적일 수 있다.
+
+### 5.5 실험 3: Distortion 측정 (MSE, Cosine Similarity)
+
+TurboQuant로 실제 KV 벡터를 양자화/복원했을 때의 왜곡을 전체 32개 레이어 평균으로 측정한다.
+
+![실험 3: Distortion 측정 결과](/assets/img/turboquant/benchmark-3.png)
+*▲ 실험 3 결과: bit-width별 MSE와 Cosine Similarity. 4-bit에서 cos_sim 0.975로 실용적 임계점*
+
+**결과**:
+
+| bit-width | Key cos_sim | Value cos_sim | Key MSE | Value MSE | 압축률 |
+|-----------|-------------|---------------|---------|-----------|--------|
+| 4-bit | **0.9749** | **0.9749** | 0.274 | 0.005 | 4.0x |
+| 3-bit | 0.9225 | 0.9229 | 0.917 | 0.017 | 5.3x |
+| 2-bit | 0.8031 | 0.8039 | 2.890 | 0.053 | 8.0x |
+
+주목할 점이 두 가지 있다. 첫째, **Key와 Value의 cos_sim은 거의 동일**하지만 **MSE는 크게 다르다** (4-bit 기준 Key MSE 0.274 vs Value MSE 0.005 — **54배 차이**). 이는 실험 2에서 확인한 K/V norm 비대칭이 양자화 오차에 직접 반영된 것이다.
+
+둘째, cos_sim 기준으로 보면 **4-bit(0.975)이 실용적 임계점**이다. 3-bit(0.923)부터는 내적 계산의 정확도가 떨어지기 시작하며, 2-bit(0.803)은 attention score가 크게 왜곡될 수 있다.
+
+```
+논문의 주장:    3.5-bit에서 "absolute quality neutrality"
+커뮤니티 실측:  4-bit cos_sim 0.975 → 실용적
+               3-bit cos_sim 0.923 → 주의 필요
+```
+
+### 5.6 실험 4: NIAH Proxy (Attention Score Top-1 보존)
+
+논문의 Needle-in-a-Haystack(4.2절) 방식을 참고한 프록시 테스트다. 랜덤 K 벡터에 "needle"을 주입한 후, TurboQuant 양자화/복원 후에도 **attention score의 top-1 위치가 보존되는지**를 확인한다.
+
+![실험 4: NIAH Proxy 결과](/assets/img/turboquant/benchmark-4.png)
+*▲ 실험 4 결과: Attention Score Top-1 보존율. 4-bit은 sequence 길이와 무관하게 0.95로 안정적*
+
+**결과**:
+
+| bit-width | seq=1,024 | seq=4,096 | seq=16,384 |
+|-----------|-----------|-----------|------------|
+| 4-bit | ✅ 0.95 | ✅ 0.95 | ✅ 0.95 |
+| 3-bit | ⚠️ 0.90 | ⚠️ 0.80 | ❌ 0.65 |
+| 2-bit | ❌ 0.70 | ❌ 0.55 | ❌ 0.50 |
+
+**4-bit은 sequence 길이와 무관하게 안정적(0.95)** 이지만, **3-bit은 sequence가 길어질수록 정확도가 떨어진다** (1K: 0.90 → 16K: 0.65). 2-bit은 모든 조건에서 사실상 사용 불가다.
+
+```
+핵심 인사이트:
+  4-bit → seq_len에 무관하게 안정적 → long context 서빙 가능
+  3-bit → 짧은 context(1~4K)에서만 실용적 → long context에서는 위험
+  2-bit → attention score 자체가 훼손 → 실전 사용 불가
+```
+
+이 결과는 논문의 "3.5-bit에서 quality neutrality" 주장과 커뮤니티 구현체 사이의 차이르 보여준다. 
+추후 Google 내부 구현에서는 outlier 처리, 비대칭 K/V 할당 등의 추가 최적화가 적용되었을 가능성이 높다.
+이에따라 벤치마크를 다시 테스트 할 예정이다.
+
+### 5.7 전체 벤치마크 결과 요약
+
+| 실험 | 핵심 결과 |
+|------|-----------|
+| Gaussianization | Llama는 회전 전부터 kurtosis=3.0 (Qwen과 대조적) |
+| K/V Norm 비대칭 | Layer 0에서 K/V ratio **43.8배** — Key가 양자화에 훨씬 민감 |
+| Distortion (4-bit) | cos_sim 0.975, Key MSE가 Value MSE의 54배 |
+| NIAH Proxy (4-bit) | seq 16K에서도 top-1 보존율 **0.95** — long context 서빙 가능 |
 
 ---
 
