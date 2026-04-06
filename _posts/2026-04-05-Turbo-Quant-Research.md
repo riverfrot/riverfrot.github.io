@@ -411,6 +411,7 @@ Qwen 모델 실측 (scos-lab):
 
 ---
 
+## 5. 벤치마크: RunPod A40에서 KV Cache 양자화 실측
 
 ### 5.1 실험 환경
 
