@@ -11,13 +11,13 @@ math: true
 [이전 글](https://riverfrot.github.io/posts/vllm-benchmark/)에서 우리는 vLLM 위에서 FP16 vs AWQ 벤치마크, Continuous Batching 성능, KV Cache 부족 시 Preemption까지 직접 확인했다. 그 과정에서 반복적으로 등장한 **병목**이 있었다.
 
 ```
-KV Cache 크기 = 2 × layers × heads × head_dim × seq_len × dtype_bytes
+KV Cache 크기 = 2 × layers × kv_heads × head_dim × seq_len × dtype_bytes
 
-예시: Qwen2.5-7B, seq_len=4096, FP16
-= 2 × 28 × 28 × 128 × 4096 × 2bytes ≈ 3.2GB (요청 1건!)
+예시: Qwen2.5-7B (GQA: 28 attention heads, 4 kv heads), seq_len=4096, FP16
+= 2 × 28 × 4 × 128 × 4096 × 2bytes ≈ 224MB (요청 1건)
 ```
 
-동시 50명이면 KV Cache만 160GB. PagedAttention으로 **할당 효율**은 개선했지만, KV Cache **자체의 크기**는 줄이지 못했다. AWQ로 모델 가중치를 줄여봤지만, 그건 KV Cache와는 별개의 문제였다.
+GQA 덕분에 짧은 context에서는 KV Cache가 작지만, seq_len이 길어지면 선형 증가한다. 동시 50명 × 32K context만 되어도 KV Cache 총량이 ~90GB로 치솟는다. PagedAttention으로 **할당 효율**은 개선했지만, KV Cache **자체의 크기**는 줄이지 못했다. AWQ로 모델 가중치를 줄여봤지만, 그건 KV Cache와는 별개의 문제였다.
 
 2026년 3월, Google Research가 ICLR 2026에서 발표한 **TurboQuant**는 바로 이 KV Cache를 **3~4bit으로 압축**하는 기법이다. 이 글에서는 TurboQuant가 왜 필요한지 Transformer의 구조부터 짚어보고, 핵심 알고리즘을 분석한 뒤, 실제 벤치마크까지 수행한다.
 
@@ -153,13 +153,13 @@ KV Cache가 있으면:
 KV Cache 덕분에 추론이 빨라졌지만, 대가가 있다. **메모리를 엄청나게 먹는다.**
 
 ```
-KV Cache 크기 = 2 × layers × heads × head_dim × seq_len × dtype_bytes
+KV Cache 크기 = 2 × layers × kv_heads × head_dim × seq_len × dtype_bytes
 
-Qwen2.5-7B 기준 (seq_len=4096, FP16):
-  2 × 28 × 28 × 128 × 4096 × 2bytes ≈ 3.2GB (요청 1건!)
+Qwen2.5-7B 기준 (GQA: 4 kv heads, seq_len=4096, FP16):
+  2 × 28 × 4 × 128 × 4096 × 2bytes ≈ 224MB (요청 1건)
 
-Llama-3.1-8B 기준 (seq_len=128K, FP16):
-  2 × 32 × 8(GQA) × 128 × 131,072 × 2bytes ≈ 16GB (요청 1건!)
+Llama-3.1-8B 기준 (GQA: 8 kv heads, seq_len=128K, FP16):
+  2 × 32 × 8 × 128 × 131,072 × 2bytes ≈ 16GB (요청 1건!)
 ```
 
 동시 사용자가 늘거나 context가 길어지면 KV Cache가 **모델 가중치보다 더 큰 메모리**를 차지한다. 이전 글에서 vLLM의 `num_requests_waiting`이 올라가고 Preemption이 발생했던 것도 바로 이 KV Cache 메모리 부족 때문이었다.

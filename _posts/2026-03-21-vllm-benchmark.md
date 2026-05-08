@@ -53,13 +53,13 @@ LLM 인퍼런스 서버:
 LLM은 토큰을 하나씩 생성(Autoregressive)할 때, 이전 토큰들의 Key-Value를 재사용해야 한다. 이걸 매번 다시 계산하면 O(n²)이 되므로, **KV Cache**에 저장해두고 재사용한다.
 
 ```
-KV Cache 크기 = 2 × layers × heads × head_dim × seq_len × dtype_bytes
+KV Cache 크기 = 2 × layers × kv_heads × head_dim × seq_len × dtype_bytes
 
-예시: Qwen2.5-7B, seq_len=4096, FP16
-= 2 × 28 × 28 × 128 × 4096 × 2bytes ≈ 3.2GB (요청 1건!)
+예시: Qwen2.5-7B (GQA: 28 attention heads, 4 kv heads), seq_len=4096, FP16
+= 2 × 28 × 4 × 128 × 4096 × 2bytes ≈ 224MB (요청 1건)
 ```
 
-동시 50명이면 KV Cache만 160GB — A100 80GB 2장도 부족하다. 이 문제를 어떻게 해결하는지가 LLM 서빙의 핵심이다.
+요청당 224MB는 작아 보이지만, seq_len이 32K로 늘면 ~1.8GB, 128K면 ~7.2GB로 선형 증가한다. 동시 50명 × 32K context면 KV Cache만 ~90GB — A100 80GB 한 장으로는 부족하다. 이 문제를 어떻게 해결하는지가 LLM 서빙의 핵심이다.
 
 ### 1.3 PagedAttention: OS의 Virtual Memory에서 답을 찾다
 
